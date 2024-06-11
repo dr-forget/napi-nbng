@@ -67,8 +67,6 @@ jobs:
       - uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.11.0
-      - name: Build with Zig
-        run: zig build
       - name: Setup toolchain
         run: ${{ matrix.settings.setup }}
         if: ${{ matrix.settings.setup }}
@@ -92,7 +90,9 @@ jobs:
         with:
           image: ${{ matrix.settings.docker }}
           options: "--user 0:0 -v ${{ github.workspace }}/.cargo-cache/git/db:/usr/local/cargo/git/db -v ${{ github.workspace }}/.cargo/registry/cache:/usr/local/cargo/registry/cache -v ${{ github.workspace }}/.cargo/registry/index:/usr/local/cargo/registry/index -v ${{ github.workspace }}:/build -w /build"
-          run: ${{ matrix.settings.build }}
+          run: |
+            curl -sSf https://ziglang.org/download/0.8.0/zig-linux-x86_64-0.8.0.tar.xz | tar -xJC /usr/local/bin 
+            ${{ matrix.settings.build }}
       - name: Build
         run: ${{ matrix.settings.build }}
         if: ${{ !matrix.settings.docker }}
