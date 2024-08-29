@@ -39,6 +39,13 @@ jobs:
               set -e &&
               rustup target add aarch64-unknown-linux-musl &&
               yarn build --target aarch64-unknown-linux-musl
+           - host: ubuntu-latest
+            target: aarch64-apple-darwin
+            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian-zig
+            build: |-
+              set -e &&
+              rustup target add aarch64-apple-darwin &&
+              yarn build --target aarch64-apple-darwin
     name: stable - ${{ matrix.settings.target }} - node@20
     runs-on: ${{ matrix.settings.host }}
     steps:
