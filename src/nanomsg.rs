@@ -6,7 +6,6 @@ use napi_derive::napi;
 use std::{
   sync::mpsc::{self, Sender},
   thread,
-  time::Duration,
 };
 
 use nng::{
@@ -21,7 +20,7 @@ pub struct SocketOptions {
   pub send_timeout: Option<i32>,
 }
 
-#[napi()]
+#[napi]
 #[derive(Clone, Debug)]
 pub struct Socket {
   client: nng::Socket,
@@ -29,9 +28,6 @@ pub struct Socket {
   pub options: SocketOptions,
 }
 
-/**
- * A simple Pair1 nanomsg protocol binding
- */
 #[napi]
 impl Socket {
   #[napi(constructor)]
@@ -47,17 +43,11 @@ impl Socket {
   pub fn create_client(opt: &SocketOptions) -> Result<nng::Socket> {
     nng::Socket::new(Protocol::Pair1)
       .map(|client| {
-        let _ = client.set_opt::<RecvTimeout>(Some(Duration::from_millis(
-          opt
-            .recv_timeout
-            .and_then(|i| i.try_into().ok())
-            .unwrap_or(5000),
+        let _ = client.set_opt::<RecvTimeout>(Some(std::time::Duration::from_millis(
+          opt.recv_timeout.and_then(|i| i.try_into().ok()).unwrap_or(5000),
         )));
-        let _ = client.set_opt::<SendTimeout>(Some(Duration::from_millis(
-          opt
-            .send_timeout
-            .and_then(|i| i.try_into().ok())
-            .unwrap_or(5000),
+        let _ = client.set_opt::<SendTimeout>(Some(std::time::Duration::from_millis(
+          opt.send_timeout.and_then(|i| i.try_into().ok()).unwrap_or(5000),
         )));
         client
       })
@@ -71,7 +61,7 @@ impl Socket {
       .dial(&url)
       .map_err(|e| Error::from_reason(format!("Connect {} failed: {}", url, e)));
     self.connected = ret.is_ok();
-    return ret;
+    ret
   }
 
   #[napi]
@@ -106,10 +96,13 @@ impl Socket {
     callback: ThreadsafeFunction<Buffer, ErrorStrategy::CalleeHandled>,
   ) -> Result<MessageRecvDisposable> {
     let client = Self::create_client(&options.unwrap_or_default())?;
-    client
-      .dial(&url)
-      .map_err(|e| Error::new(Status::GenericFailure, format!("Failed to connect: {}", e)))?;
+    client.dial(&url).map_err(|e| {
+      eprintln!("Failed to connect: {}", e);
+      Error::new(Status::GenericFailure, format!("Failed to connect: {}", e))
+    })?;
+
     let (tx, rx) = mpsc::channel::<()>();
+
     thread::spawn(move || loop {
       if let Ok(_) = rx.try_recv() {
         client.close();
@@ -117,19 +110,42 @@ impl Socket {
       }
       match client.recv() {
         Ok(msg) => {
-          callback.clone().call(
+          callback.call(
             Ok(msg.as_slice().into()),
             ThreadsafeFunctionCallMode::NonBlocking,
           );
         }
         Err(e) => {
-          if let nng::Error::Closed = e {
-            return;
+          match e {
+            nng::Error::Closed => {
+              eprintln!("Connection closed by the server");
+              callback.call(
+                Err(Error::new(Status::GenericFailure, "Connection closed by the server")),
+                ThreadsafeFunctionCallMode::NonBlocking,
+              );
+              return;
+            }
+            nng::Error::TimedOut => {
+              eprintln!("Receive operation timed out");
+              callback.call(
+                Err(Error::new(Status::GenericFailure, "Receive operation timed out")),
+                ThreadsafeFunctionCallMode::NonBlocking,
+              );
+              return;
+            }
+            _ => {
+              eprintln!("Receive error: {}", e);
+              callback.call(
+                Err(Error::new(Status::GenericFailure, format!("Receive error: {}", e))),
+                ThreadsafeFunctionCallMode::NonBlocking,
+              );
+              return;
+            }
           }
         }
       }
     });
-    return Ok(MessageRecvDisposable { closed: false, tx });
+    Ok(MessageRecvDisposable { closed: false, tx })
   }
 }
 
@@ -143,11 +159,11 @@ pub struct MessageRecvDisposable {
 impl MessageRecvDisposable {
   #[napi]
   pub fn dispose(&mut self) -> Result<()> {
-    if self.closed == false {
+    if !self.closed {
       self
         .tx
         .send(())
-        .map_err(|e| Error::from_reason(format!("Failed to stop msg channle: {}", e)))?;
+        .map_err(|e| Error::from_reason(format!("Failed to stop msg channel: {}", e)))?;
       self.closed = true;
     }
     Ok(())
