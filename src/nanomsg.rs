@@ -4,7 +4,7 @@ use napi::{
 };
 use napi_derive::napi;
 use std::{
-    sync::mpsc::{self, Sender},
+    sync::{mpsc::{self, Sender}, Arc,Mutex, atomic::{AtomicBool, Ordering}},
     thread,
     time::Duration,
 };
@@ -29,9 +29,6 @@ pub struct Socket {
     pub options: SocketOptions,
 }
 
-/**
- * A simple Pair1 nanomsg protocol binding
- */
 #[napi]
 impl Socket {
     #[napi(constructor)]
@@ -71,26 +68,22 @@ impl Socket {
                 Error::from_reason(error_message)
             });
         self.connected = ret.is_ok();
-        return ret;
+        ret
     }
 
     #[napi]
     pub fn send(&self, req: Buffer) -> Result<Buffer> {
         let msg = nng::Message::from(&req[..]);
-        self
-            .client
+        self.client
             .send(msg)
             .map_err(|(_, e)| {
                 let error_message = format!("Send rpc failed: {}", e);
                 eprintln!("{}", error_message);
                 Error::from_reason(error_message)
             })?;
-        self
-            .client
+        self.client
             .recv()
-            .map(|msg| {
-                msg.as_slice().into()
-            })
+            .map(|msg| msg.as_slice().into())
             .map_err(|e| {
                 let error_message = format!("Recv rpc failed: {}", e);
                 eprintln!("{}", error_message);
@@ -116,53 +109,65 @@ impl Socket {
         options: Option<SocketOptions>,
         callback: ThreadsafeFunction<Buffer, ErrorStrategy::CalleeHandled>,
     ) -> Result<MessageRecvDisposable> {
-        let client = Self::create_client(&options.unwrap_or_default())?;
-        client.set_opt::<RecvTimeout>(None).map_err(|e| {
-            let error_message = format!("Failed to set recv_timeout: {}", e);
-            eprintln!("{}", error_message);
-            Error::from_reason(error_message)
-        })?;
-
-        client.set_opt::<SendTimeout>(None).map_err(|e| {
-            let error_message = format!("Failed to set send_timeout: {}", e);
-            eprintln!("{}", error_message);
-            Error::from_reason(error_message)
-        })?;
-
-        client.dial(&url).map_err(|e| {
+        let client = Arc::new(Mutex::new(Self::create_client(&options.unwrap_or_default())?));
+        let listening = Arc::new(AtomicBool::new(true));
+        let listening_clone = Arc::clone(&listening);
+        
+        client.lock().unwrap().dial(&url).map_err(|e| {
             let error_message = format!("Failed to connect: {}", e);
             eprintln!("{}", error_message);
             Error::new(Status::GenericFailure, error_message)
         })?;
-        
+
         let (tx, rx) = mpsc::channel::<()>();
-        thread::spawn(move || loop {
-            if let Ok(_) = rx.try_recv() {
-                eprintln!("Stopping message reception, closing client");
-                client.close();
-                break;
-            }
-            match client.recv() {
-                Ok(msg) => {
-                    callback.clone().call(
-                        Ok(msg.as_slice().into()),
-                        ThreadsafeFunctionCallMode::NonBlocking,
-                    );
+        thread::spawn(move || {
+            let mut retry_count = 0;
+            while listening_clone.load(Ordering::Relaxed) {
+                if let Ok(_) = rx.try_recv() {
+                    eprintln!("Stopping message reception, closing client");
+                    client.lock().unwrap().close();
+                    break;
                 }
-                Err(e) => {
-                    eprintln!("Error receiving message: {}", e);
-                    callback.clone().call(
-                        Err(Error::from_reason(format!("Recv failed: {}", e))),
-                        ThreadsafeFunctionCallMode::NonBlocking,
-                    );
-                    if let nng::Error::Closed = e {
+                match client.lock().unwrap().recv() {
+                    Ok(msg) => {
+                        retry_count = 0; // Reset retry count on success
+                        callback
+                            .clone()
+                            .call(Ok(msg.as_slice().into()), ThreadsafeFunctionCallMode::NonBlocking);
+                    }
+                    Err(nng::Error::TimedOut) => {
+                        eprintln!("Timeout error, continue receiving...");
+                        continue;
+                    }
+                    Err(nng::Error::Closed) => {
                         eprintln!("Socket closed, stopping message reception");
-                        return;
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!("Error receiving message: {}", e);
+                        retry_count += 1;
+                        callback
+                            .clone()
+                            .call(Err(Error::from_reason(format!("Recv failed: {}", e))), ThreadsafeFunctionCallMode::NonBlocking);
+                        if retry_count >= 3 {
+                            eprintln!("Failed to receive messages 3 times in a row, stopping message reception");
+                            listening_clone.store(false, Ordering::Relaxed);
+                            client.lock().unwrap().close();
+                            break;
+                        } else {
+                            eprintln!("Attempting to reconnect...");
+                            if let Err(e) = client.lock().unwrap().dial(&url) {
+                                eprintln!("Reconnection attempt failed: {}", e);
+                            } else {
+                                eprintln!("Reconnected successfully");
+                            }
+                        }
                     }
                 }
             }
         });
-        return Ok(MessageRecvDisposable { closed: false, tx });
+
+        Ok(MessageRecvDisposable { closed: false, tx, listening })
     }
 }
 
@@ -170,6 +175,7 @@ impl Socket {
 pub struct MessageRecvDisposable {
     closed: bool,
     tx: Sender<()>,
+    listening: Arc<AtomicBool>,
 }
 
 #[napi]
@@ -182,6 +188,7 @@ impl MessageRecvDisposable {
                 eprintln!("{}", error_message);
                 Error::from_reason(error_message)
             })?;
+            self.listening.store(false, Ordering::Relaxed);
             self.closed = true;
         }
         Ok(())
