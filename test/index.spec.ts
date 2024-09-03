@@ -1,13 +1,13 @@
-import { Socket } from '../index';
+import { SocketWrapper } from "../index";
 
-describe('default', () => {
-    let socket: Socket;
+describe("default", () => {
+  let socket: SocketWrapper;
 
-    beforeEach(() => {
-        socket = new Socket();
-    });
+  beforeEach(() => {
+    socket = new SocketWrapper();
+  });
 
-    it("basic", () => {
-        expect(socket.connected()).toBe(false);
-    });
+  it("basic", () => {
+    expect(socket.isConnect()).toBe(false);
+  });
 });
