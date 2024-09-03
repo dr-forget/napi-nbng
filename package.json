@@ -16,6 +16,11 @@
   "bugs": {
     "url": "https://github.com/stkevintan/napi-nng/issues"
   },
+  "files": [
+    "index.js",
+    "*.node",
+    "package.json"
+  ],
   "napi": {
     "name": "nng",
     "triples": {
