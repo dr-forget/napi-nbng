@@ -10,11 +10,12 @@
     "binding",
     "napi"
   ],
-  "version": "1.1.1",
+  "version": "1.1.2",
   "main": "index.js",
   "types": "index.d.ts",
   "files": [
     "index.js",
+    "index.d.ts",
     "*.node",
     "package.json"
   ],
@@ -41,7 +42,6 @@
     "artifacts": "napi artifacts",
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
-    "prepublishOnly": "napi prepublish -t npm",
     "test": "vitest",
     "universal": "napi universal",
     "version": "napi version"
@@ -52,5 +52,12 @@
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },
-  "packageManager": "yarn@1.22.21"
+  "packageManager": "yarn@1.22.21",
+  "optionalDependencies": {
+    "@zippybee/nng-win32-x64-msvc": "1.1.1",
+    "@zippybee/nng-darwin-x64": "1.1.1",
+    "@zippybee/nng-linux-x64-gnu": "1.1.1",
+    "@zippybee/nng-darwin-arm64": "1.1.1",
+    "@zippybee/nng-darwin-universal": "1.1.1"
+  }
 }
