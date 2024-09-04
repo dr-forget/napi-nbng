@@ -1,7 +1,7 @@
 {
   "name": "@zippybee/nng",
   "author": {
-    "name": "stkevintan"
+    "name": "Forget"
   },
   "keywords": [
     "nanomsg",
@@ -13,9 +13,6 @@
   "version": "0.1.2",
   "main": "index.js",
   "types": "index.d.ts",
-  "bugs": {
-    "url": "https://github.com/stkevintan/napi-nng/issues"
-  },
   "files": [
     "index.js",
     "*.node",
@@ -51,10 +48,6 @@
   },
   "dependencies": {
     "typescript": "^5.3.3"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/stkevintan/napi-nng.git"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"

@@ -21,5 +21,4 @@ export class SocketWrapper {
   send(message: Buffer): Buffer
   recv(callback: (err: Error | null, arg: Buffer) => any): void
   close(): void
-  isConnect(): boolean
 }
