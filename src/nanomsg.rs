@@ -14,18 +14,21 @@ pub struct SocketWrapper {
 impl SocketWrapper {
     #[napi(constructor)]
     pub fn new() -> Self {
-        println!("SocketWrapper created");
         SocketWrapper { socket: None }
     }
 
     #[napi]
     pub fn connect(&mut self, protocol: ProtocolType, url: String) -> Result<bool> {
-        let socket = Socket::new(protocol.into())
-            .map_err(|err| napi::Error::from(NngErrorWrapper(err)))?;
-        socket.dial(&url)
-            .map_err(|err| napi::Error::from(NngErrorWrapper(err)))?;
+        let socket = Socket::new(protocol.into()).map_err(|err| {
+            napi::Error::new(napi::Status::GenericFailure, format!("Socket creation failed: {:?}", err))
+        })?;
+        
+        // 添加连接超时
+        socket.dial(&url).map_err(|err| {
+            napi::Error::new(napi::Status::GenericFailure, format!("Connection failed: {:?}", err))
+        })?;
+
         self.socket = Some(socket);
-        println!("Connected to {}", url);
         Ok(true) // 返回连接成功
     }
 
@@ -33,16 +36,17 @@ impl SocketWrapper {
     pub fn send(&self, message: Buffer) -> Result<Buffer> {
         if let Some(socket) = &self.socket {
             let msg = nng::Message::from(&message[..]);
+
+            // 添加发送超时错误处理
             socket.send(msg).map_err(|(_, e)| {
                 eprintln!("Failed to send message: {:?}", e);
-                napi::Error::from(NngErrorWrapper(e))
+                napi::Error::new(napi::Status::GenericFailure, format!("Send error: {:?}", e))
             })?;
-            println!("Message sent, waiting for response...");
+            
             let response = socket.recv().map_err(|e| {
-                eprintln!("Failed to receive response: {:?}", e);
-                napi::Error::from(NngErrorWrapper(e))
+                napi::Error::new(napi::Status::GenericFailure, format!("Receive error: {:?}", e))
             })?;
-            println!("Response received: {:?}", response);
+            
             Ok(response.as_slice().into())
         } else {
             eprintln!("Socket not connected");
@@ -53,19 +57,13 @@ impl SocketWrapper {
     #[napi]
     pub fn recv(&self, callback: ThreadsafeFunction<Buffer>) -> Result<()> {
         let socket = self.socket.clone(); // Clone socket to move into thread
-    
-        // 启动一个线程来接收消息
+
         std::thread::spawn(move || {
-            if let Some(socket) = socket { // 解包 Option<Socket>
-                println!("Started receiving messages");
+            if let Some(socket) = socket {
                 loop {
-                    // 调用 recv 方法
                     match socket.recv() {
                         Ok(message) => {
-                            // 将消息转换为 JsBuffer
                             let buffer = message.as_slice().into();
-    
-                            // 调用回调函数，将消息发送到 Node.js
                             let _ = callback.call(Ok(buffer), ThreadsafeFunctionCallMode::NonBlocking);
                         },
                         Err(e) => {
@@ -84,7 +82,6 @@ impl SocketWrapper {
     #[napi]
     pub fn close(&mut self) {
         if let Some(socket) = self.socket.take() {
-            println!("Closing socket");
             let _ = socket.close();
             println!("Socket closed");
         } else {
