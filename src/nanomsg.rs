@@ -11,8 +11,8 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 #[napi]
 pub struct SocketWrapper {
     socket: Option<Socket>,
-    listening: Arc<AtomicBool>, // 使用 Arc 来共享 listening 状态
-    url: Option<String>, // 添加一个字段来存储连接的 URL
+    listening: Arc<AtomicBool>,
+    url: Option<String>, // 新增字段保存 URL
 }
 
 #[napi]
@@ -21,8 +21,8 @@ impl SocketWrapper {
     pub fn new() -> Self {
         SocketWrapper {
             socket: None,
-            listening: Arc::new(AtomicBool::new(false)), // 初始化监听状态为 false
-            url: None, // 初始化 URL 为 None
+            listening: Arc::new(AtomicBool::new(false)),
+            url: None, // 初始化为 None
         }
     }
 
@@ -37,37 +37,52 @@ impl SocketWrapper {
         let socket = Socket::new(protocol.into()).map_err(|err| {
             napi::Error::new(napi::Status::GenericFailure, format!("Socket creation failed: {:?}", err))
         })?;
-        
-        // 处理接收超时和发送超时
+
+        self.url = Some(url.clone()); // 保存连接的 URL
+
         let recv_timeout_duration = if recv_timeout == 0 {
-            None // 无限超时
+            None
         } else {
             Some(Duration::from_millis(recv_timeout as u64))
         };
-        
+
         let send_timeout_duration = if send_timeout == 0 {
-            None // 无限超时
+            None
         } else {
             Some(Duration::from_millis(send_timeout as u64))
         };
-    
+
         if let Some(timeout) = recv_timeout_duration {
             socket.set_opt::<nng::options::RecvTimeout>(Some(timeout))
                 .map_err(|err| napi::Error::new(napi::Status::GenericFailure, format!("Failed to set receive timeout: {:?}", err)))?;
         }
-    
+
         if let Some(timeout) = send_timeout_duration {
             socket.set_opt::<nng::options::SendTimeout>(Some(timeout))
                 .map_err(|err| napi::Error::new(napi::Status::GenericFailure, format!("Failed to set send timeout: {:?}", err)))?;
         }
-    
+
         socket.dial(&url).map_err(|err| {
             napi::Error::new(napi::Status::GenericFailure, format!("Connection failed: {:?}", err))
         })?;
-    
+
         self.socket = Some(socket);
-        self.url = Some(url); // 存储连接的 URL
-        Ok(true) // 返回连接成功
+        Ok(true)
+    }
+
+    #[napi]
+    pub fn close(&mut self) {
+        self.listening.store(false, Ordering::Relaxed);
+        if let Some(socket) = self.socket.take() {
+            // 打印 URL
+            if let Some(url) = &self.url {
+                println!("Closing socket connected to URL: {}", url);
+            }
+            let _ = socket.close();
+            println!("Socket closed");
+        } else {
+            println!("Socket was already closed or not connected");
+        }
     }
 
     #[napi]
@@ -79,7 +94,7 @@ impl SocketWrapper {
                 eprintln!("Failed to send message: {:?}", e);
                 napi::Error::new(napi::Status::GenericFailure, format!("Send error: {:?}", e))
             })?;
-            
+
             let response = socket.recv().map_err(|e| {
                 match e {
                     NngError::TimedOut => {
@@ -90,7 +105,7 @@ impl SocketWrapper {
                     }
                 }
             })?;
-            
+
             Ok(response.as_slice().into())
         } else {
             eprintln!("Socket not connected");
@@ -100,14 +115,14 @@ impl SocketWrapper {
 
     #[napi]
     pub fn recv(&self, callback: ThreadsafeFunction<Buffer>) -> Result<()> {
-        let socket = self.socket.clone(); // Clone socket to move into thread
-        let listening = Arc::clone(&self.listening); // 使用 Arc 来共享 listening 状态
+        let socket = self.socket.clone();
+        let listening = Arc::clone(&self.listening);
 
-        listening.store(true, Ordering::Relaxed); // 设置监听状态为 true
+        listening.store(true, Ordering::Relaxed);
 
         std::thread::spawn(move || {
             if let Some(socket) = socket {
-                while listening.load(Ordering::Relaxed) { // 检查监听状态
+                while listening.load(Ordering::Relaxed) {
                     match socket.recv() {
                         Ok(message) => {
                             let buffer = message.as_slice().into();
@@ -117,7 +132,9 @@ impl SocketWrapper {
                             eprintln!("Receive timed out.");
                         }
                         Err(e) => {
-                            eprintln!("Error receiving message: {:?}", e);
+                            if listening.load(Ordering::Relaxed) { // 只有在未主动关闭时才打印错误
+                                eprintln!("Error receiving message: {:?}", e);
+                            }
                         }
                     }
                 }
@@ -129,24 +146,8 @@ impl SocketWrapper {
     }
 
     #[napi]
-    pub fn close(&mut self) {
-        self.listening.store(false, Ordering::Relaxed); // 设置监听状态为 false
-        if let Some(socket) = self.socket.take() {
-            let _ = socket.close();
-            if let Some(ref url) = self.url {
-                println!("Socket closed for URL: {}", url); // 打印连接的 URL
-            } else {
-                println!("Socket closed, but no URL was stored.");
-            }
-        } else {
-            println!("Socket was already closed or not connected");
-        }
-        self.url = None; // 清空 URL
-    }
-
-    #[napi]
     pub fn is_connect(&self) -> bool {
-        self.socket.is_some() // 如果 socket 是 Some，则表示连接成功
+        self.socket.is_some()
     }
 }
 
